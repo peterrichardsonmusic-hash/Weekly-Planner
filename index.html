@@ -89,6 +89,19 @@ button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px so
  input[type=text],textarea{font-size:16px}
  .edit-row .nm{min-width:0}
 }
+.wk{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.wk b{font-size:17px;font-weight:600;min-width:170px;text-align:center}
+.wk button{min-height:40px}
+button:disabled{opacity:.45;cursor:default}
+.dh small{display:block;font-weight:400;font-size:12px;opacity:.8}
+.dh.today{background:var(--sel);color:var(--bg);border-radius:8px}
+.cell.tcol{outline:2px solid color-mix(in srgb,var(--sel) 35%,transparent);outline-offset:1px}
+.tab small{font-size:12px;padding:0 7px;border-radius:8px}
+.tab.today small{background:var(--sel);color:var(--bg)}
+.track{position:relative}
+.tg{position:absolute;top:0;bottom:0;width:3px;background:var(--ink);opacity:.75}
+.edit-row input[type=number]{border:1px solid var(--line);background:var(--empty);color:inherit;border-radius:8px;padding:6px;font:inherit}
+.fb{border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer;background:var(--panel)}
 @media (prefers-reduced-motion:reduce){.fill{transition:none}}
 </style>
 </head>
@@ -98,7 +111,7 @@ button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px so
     <h1>My week</h1>
     <span class="hint" id="hint">Drag an activity into a box, or tap one and then tap boxes. Click a filled box to add a note.</span>
     <span class="sp"></span>
-    <button id="clear">Clear week</button>
+    <button id="undo" disabled>↩ Undo</button><button id="clear">Clear week</button><button id="bkb">Export / import</button>
   </header>
 
   <div class="bar">
@@ -106,9 +119,10 @@ button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px so
     <div class="pal" id="pal"></div>
   </div>
 
+  <div class="wk"><button id="wp" aria-label="Previous week">‹</button><b id="wl"></b><button id="wn" aria-label="Next week">›</button><button id="wt">This week</button><button id="wc">Copy last week</button></div>
   <div class="scroll"><div class="grid" id="grid"></div></div>
 
-  <div class="stats"><h2>Where your week goes</h2><div id="stats"></div></div>
+  <div class="stats"><h2>Where your week goes</h2><div class="hint" style="margin-bottom:6px">Set a weekly target per activity under Edit activities; a marker on the bar shows it.</div><div id="stats"></div></div>
 
   <div class="stats"><h2>Pillars</h2><div class="hint" style="margin-bottom:6px">Each box counts toward every pillar its activity strengthens.</div><div id="pillars"></div></div>
 </div>
@@ -134,17 +148,78 @@ var PILLARS=[
  {id:'health',n:'Health',f:'Health',c:'#2e9d5b'}
 ];
 var DEFAULT_P={c1:['pp','health'],c2:['work'],c3:['work','pp'],c4:['health'],c5:['ll']};
+var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function iso(d){return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);}
+function monday(d){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate());x.setDate(x.getDate()-((x.getDay()+6)%7));return x;}
 var cats=DEFAULT_CATS.slice(), plan={}, notes={}, selected=null, editing=false, noteKey=null;
+var weeks={}, targets={}, undoStack=[], wk=iso(monday(new Date()));
+function dateOf(di){var p=wk.split('-');return new Date(+p[0],+p[1]-1,+p[2]+di);}
+function isToday(di){return wk===iso(monday(new Date()))&&di===(new Date().getDay()+6)%7;}
+function fmt(d){return DAYS[(d.getDay()+6)%7]+' '+d.getDate()+' '+MON[d.getMonth()];}
+function syncWeek(){if(Object.keys(plan).length||Object.keys(notes).length)weeks[wk]={plan:plan,notes:notes};else delete weeks[wk];}
+function data(){return {v:2,cats:cats,weeks:weeks,targets:targets};}
+function renderWeekbar(){
+  document.getElementById('wl').textContent=fmt(dateOf(0))+' – '+fmt(dateOf(6));
+  document.getElementById('wt').disabled=(wk===iso(monday(new Date())));
+}
+function setWeek(w){
+  syncWeek();wk=w;var o=weeks[wk]||{};plan=o.plan||{};notes=o.notes||{};
+  undoStack=[];updateUndo();
+  for(var i=0;i<7;i++)if(isToday(i))curDay=i;
+  renderWeekbar();renderGrid();renderStats();
+}
+function shiftWeek(n){var d=dateOf(0);d.setDate(d.getDate()+7*n);setWeek(iso(d));}
+function copyLast(){
+  var d=dateOf(0);d.setDate(d.getDate()-7);
+  var src=weeks[iso(d)];
+  if(!src||!Object.keys(src.plan||{}).length){alert('Last week is empty.');return;}
+  if(Object.keys(plan).length&&!confirm('Replace this week with last week’s plan?'))return;
+  pushUndo();
+  plan=JSON.parse(JSON.stringify(src.plan));notes=JSON.parse(JSON.stringify(src.notes||{}));
+  save();renderGrid();renderStats();
+}
+function pushUndo(){undoStack.push(JSON.stringify({plan:plan,notes:notes}));if(undoStack.length>40)undoStack.shift();updateUndo();}
+function updateUndo(){document.getElementById('undo').disabled=!undoStack.length;}
+function undo(){
+  if(!undoStack.length)return;
+  var s=JSON.parse(undoStack.pop());plan=s.plan;notes=s.notes;
+  save();renderGrid();renderStats();updateUndo();
+}
+function openBackup(){
+  syncWeek();
+  var m=document.createElement('div');m.className='modal';
+  var box=document.createElement('div');box.className='box';
+  box.innerHTML='<h2 style="font-size:16px;margin:0 0 8px">Export / import</h2><div class="hint" style="margin-bottom:8px">Copy or download this text to back up your plan, or to move it to another device. To restore, paste a backup here (or load a file) and press Import. Importing replaces everything currently here.</div><textarea id="bk" spellcheck="false"></textarea><div class="mb"><button id="bc">Copy</button><button id="bd">Download</button><label class="fb">Load file<input type="file" accept=".json,application/json" hidden></label><span style="flex:1"></span><button id="bx">Close</button><button id="bi">Import</button></div>';
+  m.appendChild(box);document.body.appendChild(m);
+  var ta=box.querySelector('#bk');ta.value=JSON.stringify(data());
+  box.querySelector('#bx').onclick=function(){m.remove();};
+  m.onclick=function(ev){if(ev.target===m)m.remove();};
+  box.querySelector('#bc').onclick=function(){ta.select();try{navigator.clipboard.writeText(ta.value);}catch(e){document.execCommand('copy');}};
+  box.querySelector('#bd').onclick=function(){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([ta.value],{type:'application/json'}));a.download='week-planner-backup.json';a.click();};
+  box.querySelector('input[type=file]').onchange=function(){var f=this.files[0];if(!f)return;var r=new FileReader();r.onload=function(){ta.value=r.result;};r.readAsText(f);};
+  box.querySelector('#bi').onclick=function(){
+    try{
+      var o=JSON.parse(ta.value);
+      if(!o||!Array.isArray(o.cats)||typeof o.weeks!=='object')throw 0;
+      if(!confirm('Replace everything with this backup?'))return;
+      cats=o.cats;weeks=o.weeks||{};targets=o.targets||{};
+      cats.forEach(function(c){if(!c.p)c.p=[];});
+      var w=weeks[wk]||{};plan=w.plan||{};notes=w.notes||{};undoStack=[];
+      save();m.remove();renderAll();updateUndo();
+    }catch(e){alert('That doesn’t look like a valid backup.');}
+  };
+}
 
 function load(){
   try{
     var s=localStorage.getItem('weekplanner.v1');
-    if(s){var o=JSON.parse(s); if(o.cats&&o.cats.length)cats=o.cats; if(o.plan)plan=o.plan; if(o.notes)notes=o.notes;}
+    if(s){var o=JSON.parse(s); if(o.cats&&o.cats.length)cats=o.cats; if(o.weeks){weeks=o.weeks;targets=o.targets||{};}else if(o.plan||o.notes){weeks[wk]={plan:o.plan||{},notes:o.notes||{}};}
+      var w=weeks[wk]||{};plan=w.plan||{};notes=w.notes||{};}
   }catch(e){}
   cats.forEach(function(c){if(!c.p)c.p=(DEFAULT_P[c.id]||[]).slice();});
 }
 function save(){
-  try{localStorage.setItem('weekplanner.v1',JSON.stringify({cats:cats,plan:plan,notes:notes}));}catch(e){}
+  try{localStorage.setItem('weekplanner.v1',JSON.stringify((syncWeek(),data())));}catch(e){}
 }
 function cat(id){for(var i=0;i<cats.length;i++)if(cats[i].id===id)return cats[i];return null;}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -157,12 +232,14 @@ function renderPal(){
       r.innerHTML='<input type="text" class="em" maxlength="4" value="'+esc(c.e)+'" aria-label="Symbol">'+
         '<input type="text" class="nm" value="'+esc(c.n)+'" aria-label="Name">'+
         '<input type="color" value="'+c.c+'" aria-label="Colour">'+
+        '<label class="pl" title="Boxes per week you are aiming for">Target <input type="number" min="0" max="35" style="width:56px" value="'+(targets[c.id]||'')+'"></label>'+
         '<span class="pl" title="Pillars this activity strengthens">'+PILLARS.map(function(p){return '<label><input type="checkbox" data-p="'+p.id+'"'+(c.p.indexOf(p.id)>-1?' checked':'')+'>'+p.n+'</label>';}).join('')+'</span>'+
         '<button aria-label="Delete activity">Delete</button>';
       var ins=r.querySelectorAll('input');
       ins[0].oninput=function(){c.e=this.value;save();renderGrid();renderStats();};
       ins[1].oninput=function(){c.n=this.value;save();renderGrid();renderStats();};
       ins[2].oninput=function(){c.c=this.value;save();renderGrid();renderStats();};
+      r.querySelector('input[type=number]').oninput=function(){var v=parseInt(this.value,10);if(v>0)targets[c.id]=v;else delete targets[c.id];save();renderStats();};
       r.querySelectorAll('input[type=checkbox]').forEach(function(b){
         b.onchange=function(){
           var id=b.getAttribute('data-p'),i=c.p.indexOf(id);
@@ -173,7 +250,7 @@ function renderPal(){
       });
       r.querySelector('button').onclick=function(){
         cats.splice(i,1);
-        for(var k in plan)if(plan[k]===c.id){delete plan[k];delete notes[k];}
+        delete targets[c.id];for(var k in plan)if(plan[k]===c.id){delete plan[k];delete notes[k];}
         if(selected===c.id)selected=null;
         save();renderAll();
       };
@@ -199,13 +276,13 @@ function renderPal(){
 function renderGridDesktop(){
   var g=document.getElementById('grid');g.innerHTML='';
   g.appendChild(document.createElement('div'));
-  DAYS.forEach(function(d){var h=document.createElement('div');h.className='dh';h.textContent=d;g.appendChild(h);});
+  DAYS.forEach(function(d,di){var h=document.createElement('div');h.className='dh'+(isToday(di)?' today':'');h.innerHTML=d+'<small>'+dateOf(di).getDate()+' '+MON[dateOf(di).getMonth()]+'</small>';g.appendChild(h);});
   SEGS.forEach(function(sn,si){
     var l=document.createElement('div');l.className='sh';l.textContent=sn;g.appendChild(l);
     DAYS.forEach(function(dn,di){
       var key=di+'-'+si, c=cat(plan[key]);
       var cell=document.createElement('div');
-      cell.className='cell'+(c?' full':'');
+      cell.className='cell'+(c?' full':'')+(isToday(di)?' tcol':'');
       cell.setAttribute('aria-label',dn+' '+sn+(c?': '+c.n:': empty'));
       if(c){
         cell.style.setProperty('--c',c.c);cell.draggable=true;
@@ -216,7 +293,7 @@ function renderGridDesktop(){
       cell.ondragleave=function(){cell.classList.remove('over');};
       cell.ondrop=function(ev){
         ev.preventDefault();cell.classList.remove('over');
-        var t=ev.dataTransfer.getData('text/plain')||'';
+        var t=ev.dataTransfer.getData('text/plain')||'';pushUndo();
         if(t.indexOf('cat:')===0){plan[key]=t.slice(4);}
         else if(t.indexOf('cell:')===0){
           var from=t.slice(5);if(from===key)return;
@@ -227,7 +304,7 @@ function renderGridDesktop(){
         save();renderGrid();renderStats();
       };
       cell.onclick=function(){
-        if(selected){plan[key]=selected;}
+        if(selected){pushUndo();plan[key]=selected;}
         else if(plan[key]){openNote(key);return;}
         else return;
         save();renderGrid();renderStats();
@@ -246,16 +323,16 @@ function renderGrid(){
   g.className='mday';g.innerHTML='';
   var tabs=document.createElement('div');tabs.className='tabs';
   DAYS.forEach(function(dn,di){
-    var b=document.createElement('button');b.className='tab'+(di===curDay?' on':'');
+    var b=document.createElement('button');b.className='tab'+(di===curDay?' on':'')+(isToday(di)?' today':'');
     var dots='';
     for(var si=0;si<SEGS.length;si++){var c=cat(plan[di+'-'+si]);dots+='<i style="background:'+(c?c.c:'var(--line)')+'"></i>';}
-    b.innerHTML='<b>'+dn+'</b><span class="dots">'+dots+'</span>';
+    b.innerHTML='<b>'+dn+'</b><small>'+dateOf(di).getDate()+'</small><span class="dots">'+dots+'</span>';
     b.onclick=function(){curDay=di;renderGrid();};
     tabs.appendChild(b);
   });
   g.appendChild(tabs);
   var t=document.createElement('div');t.className='dtitle';
-  t.innerHTML='<button aria-label="Previous day">‹</button><b>'+FULLDAYS[curDay]+'</b><button aria-label="Next day">›</button>';
+  t.innerHTML='<button aria-label="Previous day">‹</button><b>'+FULLDAYS[curDay]+' '+dateOf(curDay).getDate()+' '+MON[dateOf(curDay).getMonth()]+(isToday(curDay)?' · Today':'')+'</b><button aria-label="Next day">›</button>';
   var tb=t.querySelectorAll('button');
   tb[0].onclick=function(){curDay=(curDay+6)%7;renderGrid();};
   tb[1].onclick=function(){curDay=(curDay+1)%7;renderGrid();};
@@ -270,7 +347,7 @@ function renderGrid(){
       cell.innerHTML='<span class="e">'+esc(c.e)+'</span><div><b>'+esc(c.n)+'</b>'+(notes[key]?'<div class="mn">'+esc(notes[key])+'</div>':'')+'</div>';
     }else{cell.textContent=selected?'Tap to add':'Tap to choose';}
     cell.onclick=function(){
-      if(selected){plan[key]=selected;save();renderGrid();renderStats();}
+      if(selected){pushUndo();plan[key]=selected;save();renderGrid();renderStats();}
       else if(plan[key]){openNote(key);}
       else{openPicker(key);}
     };
@@ -285,7 +362,7 @@ function openPicker(key){
   cats.forEach(function(c){
     var b=document.createElement('button');b.className='pbtn';b.style.setProperty('--c',c.c);
     b.innerHTML='<span class="e">'+esc(c.e)+'</span><span>'+esc(c.n)+'</span>';
-    b.onclick=function(){plan[key]=c.id;save();m.remove();renderGrid();renderStats();};
+    b.onclick=function(){pushUndo();plan[key]=c.id;save();m.remove();renderGrid();renderStats();};
     box.appendChild(b);
   });
   var x=document.createElement('button');x.textContent='Cancel';x.style.width='100%';x.onclick=function(){m.remove();};
@@ -299,7 +376,7 @@ function renderStats(){
   for(var k in plan){if(cat(plan[k])){counts[plan[k]]=(counts[plan[k]]||0)+1;used++;}}
   cats.forEach(function(c){
     var n=counts[c.id]||0, r=document.createElement('div');r.className='srow';
-    r.innerHTML='<span>'+esc(c.e)+' '+esc(c.n)+'</span><div class="track"><div class="fill" style="--c:'+c.c+';width:'+(n/total*100)+'%"></div></div><span>'+n+' / '+total+'</span>';
+    r.innerHTML='<span>'+esc(c.e)+' '+esc(c.n)+'</span><div class="track"><div class="fill" style="--c:'+c.c+';width:'+(n/total*100)+'%"></div>'+(targets[c.id]?'<i class="tg" style="left:'+Math.min(100,targets[c.id]/total*100)+'%"></i>':'')+'</div><span>'+(targets[c.id]?(n>=targets[c.id]?'✓ ':'')+n+' / '+targets[c.id]:n+' / '+total)+'</span>';
     s.appendChild(r);
   });
   var f=document.createElement('div');f.className='hint';f.style.marginTop='8px';
@@ -332,15 +409,15 @@ document.getElementById('mc').onclick=closeNote;
 document.getElementById('modal').onclick=function(ev){if(ev.target===this)closeNote();};
 document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&noteKey)closeNote();});
 document.getElementById('ms').onclick=function(){
-  var v=document.getElementById('mn').value.trim();
+  var v=document.getElementById('mn').value.trim();pushUndo();
   if(v)notes[noteKey]=v;else delete notes[noteKey];
   save();closeNote();renderGrid();
 };
 document.getElementById('mrm').onclick=function(){
-  delete plan[noteKey];delete notes[noteKey];
+  pushUndo();delete plan[noteKey];delete notes[noteKey];
   save();closeNote();renderGrid();renderStats();
 };
-function renderAll(){renderPal();renderGrid();renderStats();}
+function renderAll(){renderPal();renderWeekbar();renderGrid();renderStats();}
 
 document.getElementById('toggleEdit').onclick=function(){
   editing=!editing;selected=null;this.textContent=editing?'Done editing':'Edit activities';
@@ -348,10 +425,19 @@ document.getElementById('toggleEdit').onclick=function(){
   renderPal();
 };
 document.getElementById('clear').onclick=function(){
-  if(Object.keys(plan).length&&confirm('Clear every box in the week?')){plan={};notes={};save();renderGrid();renderStats();}
+  if(Object.keys(plan).length&&confirm('Clear every box in the week?')){pushUndo();plan={};notes={};save();renderGrid();renderStats();}
 };
 try{window.matchMedia('(max-width:700px)').addEventListener('change',renderGrid);}catch(e){}
-load();renderAll();
+document.getElementById('wp').onclick=function(){shiftWeek(-1);};
+document.getElementById('wn').onclick=function(){shiftWeek(1);};
+document.getElementById('wt').onclick=function(){setWeek(iso(monday(new Date())));};
+document.getElementById('wc').onclick=copyLast;
+document.getElementById('undo').onclick=undo;
+document.getElementById('bkb').onclick=openBackup;
+document.addEventListener('keydown',function(ev){
+  if((ev.metaKey||ev.ctrlKey)&&ev.key==='z'&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName)){ev.preventDefault();undo();}
+});
+load();renderAll();updateUndo();
 </script>
 </body>
 </html>
